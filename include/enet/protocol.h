@@ -1,4 +1,4 @@
-/** 
+/**
  @file  protocol.h
  @brief ENet protocol
 */
@@ -9,35 +9,35 @@
 
 enum
 {
-   ENET_PROTOCOL_MINIMUM_MTU             = 576,
-   ENET_PROTOCOL_MAXIMUM_MTU             = 4096,
+   ENET_PROTOCOL_MINIMUM_MTU = 576,
+   ENET_PROTOCOL_MAXIMUM_MTU = 4096,
    ENET_PROTOCOL_MAXIMUM_PACKET_COMMANDS = 32,
-   ENET_PROTOCOL_MINIMUM_WINDOW_SIZE     = 4096,
-   ENET_PROTOCOL_MAXIMUM_WINDOW_SIZE     = 65536,
-   ENET_PROTOCOL_MINIMUM_CHANNEL_COUNT   = 1,
-   ENET_PROTOCOL_MAXIMUM_CHANNEL_COUNT   = 255,
-   ENET_PROTOCOL_MAXIMUM_PEER_ID         = 0xFFF,
-   ENET_PROTOCOL_MAXIMUM_FRAGMENT_COUNT  = 1024 * 1024
+   ENET_PROTOCOL_MINIMUM_WINDOW_SIZE = 4096,
+   ENET_PROTOCOL_MAXIMUM_WINDOW_SIZE = 65536,
+   ENET_PROTOCOL_MINIMUM_CHANNEL_COUNT = 1,
+   ENET_PROTOCOL_MAXIMUM_CHANNEL_COUNT = 255,
+   ENET_PROTOCOL_MAXIMUM_PEER_ID = 0xFFF,
+   ENET_PROTOCOL_MAXIMUM_FRAGMENT_COUNT = 1024 * 1024
 };
 
 typedef enum _ENetProtocolCommand
 {
-   ENET_PROTOCOL_COMMAND_NONE               = 0,
-   ENET_PROTOCOL_COMMAND_ACKNOWLEDGE        = 1,
-   ENET_PROTOCOL_COMMAND_CONNECT            = 2,
-   ENET_PROTOCOL_COMMAND_VERIFY_CONNECT     = 3,
-   ENET_PROTOCOL_COMMAND_DISCONNECT         = 4,
-   ENET_PROTOCOL_COMMAND_PING               = 5,
-   ENET_PROTOCOL_COMMAND_SEND_RELIABLE      = 6,
-   ENET_PROTOCOL_COMMAND_SEND_UNRELIABLE    = 7,
-   ENET_PROTOCOL_COMMAND_SEND_FRAGMENT      = 8,
-   ENET_PROTOCOL_COMMAND_SEND_UNSEQUENCED   = 9,
-   ENET_PROTOCOL_COMMAND_BANDWIDTH_LIMIT    = 10,
+   ENET_PROTOCOL_COMMAND_NONE = 0,
+   ENET_PROTOCOL_COMMAND_ACKNOWLEDGE = 1,
+   ENET_PROTOCOL_COMMAND_CONNECT = 2,
+   ENET_PROTOCOL_COMMAND_VERIFY_CONNECT = 3,
+   ENET_PROTOCOL_COMMAND_DISCONNECT = 4,
+   ENET_PROTOCOL_COMMAND_PING = 5,
+   ENET_PROTOCOL_COMMAND_SEND_RELIABLE = 6,
+   ENET_PROTOCOL_COMMAND_SEND_UNRELIABLE = 7,
+   ENET_PROTOCOL_COMMAND_SEND_FRAGMENT = 8,
+   ENET_PROTOCOL_COMMAND_SEND_UNSEQUENCED = 9,
+   ENET_PROTOCOL_COMMAND_BANDWIDTH_LIMIT = 10,
    ENET_PROTOCOL_COMMAND_THROTTLE_CONFIGURE = 11,
    ENET_PROTOCOL_COMMAND_SEND_UNRELIABLE_FRAGMENT = 12,
-   ENET_PROTOCOL_COMMAND_COUNT              = 13,
+   ENET_PROTOCOL_COMMAND_COUNT = 13,
 
-   ENET_PROTOCOL_COMMAND_MASK               = 0x0F
+   ENET_PROTOCOL_COMMAND_MASK = 0x0F
 } ENetProtocolCommand;
 
 typedef enum _ENetProtocolFlag
@@ -46,18 +46,18 @@ typedef enum _ENetProtocolFlag
    ENET_PROTOCOL_COMMAND_FLAG_UNSEQUENCED = (1 << 6),
 
    ENET_PROTOCOL_HEADER_FLAG_COMPRESSED = (1 << 14),
-   ENET_PROTOCOL_HEADER_FLAG_SENT_TIME  = (1 << 15),
-   ENET_PROTOCOL_HEADER_FLAG_MASK       = ENET_PROTOCOL_HEADER_FLAG_COMPRESSED | ENET_PROTOCOL_HEADER_FLAG_SENT_TIME,
+   ENET_PROTOCOL_HEADER_FLAG_SENT_TIME = (1 << 15),
+   ENET_PROTOCOL_HEADER_FLAG_MASK = ENET_PROTOCOL_HEADER_FLAG_COMPRESSED | ENET_PROTOCOL_HEADER_FLAG_SENT_TIME,
 
-   ENET_PROTOCOL_HEADER_SESSION_MASK    = (3 << 12),
-   ENET_PROTOCOL_HEADER_SESSION_SHIFT   = 12
+   ENET_PROTOCOL_HEADER_SESSION_MASK = (3 << 12),
+   ENET_PROTOCOL_HEADER_SESSION_SHIFT = 12
 } ENetProtocolFlag;
 
 #ifdef _MSC_VER
 #pragma pack(push, 1)
 #define ENET_PACKED
 #elif defined(__GNUC__) || defined(__clang__)
-#define ENET_PACKED __attribute__ ((packed))
+#define ENET_PACKED __attribute__((packed))
 #else
 #define ENET_PACKED
 #endif
@@ -67,6 +67,13 @@ typedef struct _ENetProtocolHeader
    enet_uint16 peerID;
    enet_uint16 sentTime;
 } ENET_PACKED ENetProtocolHeader;
+
+typedef struct _ENetNewProtocolHeader
+{
+   enet_uint16 integrity[3];
+   enet_uint16 peerID;
+   enet_uint16 sentTime;
+} ENET_PACKED ENetNewProtocolHeader;
 
 typedef struct _ENetProtocolCommandHeader
 {
@@ -86,8 +93,8 @@ typedef struct _ENetProtocolConnect
 {
    ENetProtocolCommandHeader header;
    enet_uint16 outgoingPeerID;
-   enet_uint8  incomingSessionID;
-   enet_uint8  outgoingSessionID;
+   enet_uint8 incomingSessionID;
+   enet_uint8 outgoingSessionID;
    enet_uint32 mtu;
    enet_uint32 windowSize;
    enet_uint32 channelCount;
@@ -104,8 +111,8 @@ typedef struct _ENetProtocolVerifyConnect
 {
    ENetProtocolCommandHeader header;
    enet_uint16 outgoingPeerID;
-   enet_uint8  incomingSessionID;
-   enet_uint8  outgoingSessionID;
+   enet_uint8 incomingSessionID;
+   enet_uint8 outgoingSessionID;
    enet_uint32 mtu;
    enet_uint32 windowSize;
    enet_uint32 channelCount;
@@ -195,4 +202,3 @@ typedef union _ENetProtocol
 #endif
 
 #endif /* __ENET_PROTOCOL_H__ */
-
