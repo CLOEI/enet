@@ -1014,6 +1014,7 @@ static int
 enet_protocol_handle_incoming_commands (ENetHost * host, ENetEvent * event)
 {
     ENetProtocolHeader * header;
+    ENetNewProtocolHeader * newHeader;
     ENetProtocol * command;
     ENetPeer * peer;
     enet_uint8 * currentData;
@@ -1021,17 +1022,34 @@ enet_protocol_handle_incoming_commands (ENetHost * host, ENetEvent * event)
     enet_uint16 peerID, flags;
     enet_uint8 sessionID;
 
-    if (host -> receivedDataLength < ENET_OFFSETOF(ENetProtocolHeader, sentTime))
-      return 0;
+    if (host->usingNewPacketForServer)
+    {
+        if (host -> receivedDataLength < ENET_OFFSETOF(ENetNewProtocolHeader, sentTime))
+          return 0;
+        newHeader = (ENetNewProtocolHeader *) host -> receivedData;
+        peerID = ENET_NET_TO_HOST_16 (newHeader -> peerID);
+    } else
+    {
+        if (host -> receivedDataLength < ENET_OFFSETOF(ENetProtocolHeader, sentTime))
+          return 0;
+        header = (ENetProtocolHeader *) host -> receivedData;
+        peerID = ENET_NET_TO_HOST_16 (header -> peerID);
+    }
 
-    header = (ENetProtocolHeader *) host -> receivedData;
 
-    peerID = ENET_NET_TO_HOST_16 (header -> peerID);
     sessionID = (peerID & ENET_PROTOCOL_HEADER_SESSION_MASK) >> ENET_PROTOCOL_HEADER_SESSION_SHIFT;
     flags = peerID & ENET_PROTOCOL_HEADER_FLAG_MASK;
     peerID &= ~ (ENET_PROTOCOL_HEADER_FLAG_MASK | ENET_PROTOCOL_HEADER_SESSION_MASK);
 
-    headerSize = (flags & ENET_PROTOCOL_HEADER_FLAG_SENT_TIME ? sizeof (ENetProtocolHeader) : ENET_OFFSETOF(ENetProtocolHeader, sentTime));
+    if (host->usingNewPacketForServer)
+    {
+        headerSize = (flags & ENET_PROTOCOL_HEADER_FLAG_SENT_TIME ? sizeof (ENetNewProtocolHeader) : ENET_OFFSETOF(ENetNewProtocolHeader, sentTime));
+    }
+    else
+    {
+        headerSize = (flags & ENET_PROTOCOL_HEADER_FLAG_SENT_TIME ? sizeof (ENetProtocolHeader) : ENET_OFFSETOF(ENetProtocolHeader, sentTime));
+    }
+
     if (host -> checksum != NULL)
       headerSize += sizeof (enet_uint32);
 
@@ -1052,6 +1070,21 @@ enet_protocol_handle_incoming_commands (ENetHost * host, ENetEvent * event)
            (peer -> outgoingPeerID < ENET_PROTOCOL_MAXIMUM_PEER_ID &&
             sessionID != peer -> incomingSessionID))
          return 0;
+
+       if (host->usingNewPacketForServer) {
+            enet_uint16 integrity[3];
+            integrity[0] = ENET_NET_TO_HOST_16(newHeader->integrity[0]);
+            integrity[1] = ENET_NET_TO_HOST_16(newHeader->integrity[1]);
+            integrity[2] = ENET_NET_TO_HOST_16(newHeader->integrity[2]);
+
+            if ((integrity[0] < 0 || integrity[0] > host->address.port) ||
+                integrity[0] != (integrity[1] ^ host->address.port) ||
+                host->address.port != (integrity[0] ^ integrity[1]) ||
+                integrity[2] == peer->reserved)
+            return 0;
+
+            peer->reserved = integrity[2];
+        }
     }
 
     if (flags & ENET_PROTOCOL_HEADER_FLAG_COMPRESSED)
@@ -1068,7 +1101,12 @@ enet_protocol_handle_incoming_commands (ENetHost * host, ENetEvent * event)
         if (originalSize <= 0 || originalSize > sizeof (host -> packetData [1]) - headerSize)
           return 0;
 
-        memcpy (host -> packetData [1], header, headerSize);
+        if (host->usingNewPacketForServer) {
+            memcpy (host -> packetData [1], newHeader, headerSize);
+        } else
+        {
+            memcpy (host -> packetData [1], header, headerSize);
+        }
         host -> receivedData = host -> packetData [1];
         host -> receivedDataLength = headerSize + originalSize;
     }
@@ -1135,7 +1173,11 @@ enet_protocol_handle_incoming_commands (ENetHost * host, ENetEvent * event)
        case ENET_PROTOCOL_COMMAND_CONNECT:
           if (peer != NULL)
             goto commandError;
-          peer = enet_protocol_handle_connect (host, header, command);
+          if (host->usingNewPacketForServer) {
+              peer = enet_protocol_handle_connect (host, *(ENetProtocolHeader **)&newHeader->peerID, command);
+          } else {
+              peer = enet_protocol_handle_connect (host, header, command);
+          }
           if (peer == NULL)
             goto commandError;
           break;
@@ -1202,7 +1244,14 @@ enet_protocol_handle_incoming_commands (ENetHost * host, ENetEvent * event)
            if (! (flags & ENET_PROTOCOL_HEADER_FLAG_SENT_TIME))
              break;
 
-           sentTime = ENET_NET_TO_HOST_16 (header -> sentTime);
+
+           if (host->usingNewPacketForServer) {
+               sentTime = ENET_NET_TO_HOST_16 (newHeader -> sentTime);
+           }
+           else
+           {
+               sentTime = ENET_NET_TO_HOST_16 (header -> sentTime);
+           }
 
            switch (peer -> state)
            {
