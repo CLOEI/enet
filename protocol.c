@@ -1653,7 +1653,7 @@ enet_protocol_send_outgoing_commands (ENetHost * host, ENetEvent * event, int ch
 {
     size_t packetSize = host->usingNewPacket ? sizeof(ENetNewProtocolHeader)
                                              : sizeof(ENetProtocolHeader);
-    enet_uint8 headerData [sizeof (ENetProtocolHeader) + sizeof (enet_uint32)];
+    enet_uint8 headerData [sizeof (ENetNewProtocolHeader) + sizeof (enet_uint32)];
     ENetProtocolHeader * header = (ENetProtocolHeader *) headerData;
     ENetNewProtocolHeader * newHeader = (ENetNewProtocolHeader *)headerData;
     int sentLength = 0;
