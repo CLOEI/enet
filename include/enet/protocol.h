@@ -53,6 +53,76 @@ typedef enum _ENetProtocolFlag
    ENET_PROTOCOL_HEADER_SESSION_SHIFT   = 12
 } ENetProtocolFlag;
 
+typedef enum _ENetSocks5State
+{
+   ENET_SOCKS5_STATE_NONE,
+   ENET_SOCKS5_STATE_SEND_AUTH_REQUEST,
+   ENET_SOCKS5_STATE_RECEIVE_AUTH_RESPONSE,
+   ENET_SOCKS5_STATE_SEND_AUTH_REQUEST_USERNAME,
+   ENET_SOCKS5_STATE_RECEIVE_AUTH_RESPONSE_USERNAME,
+   ENET_SOCKS5_STATE_SEND_REQUEST,
+   ENET_SOCKS5_STATE_RECEIVE_RESPONSE,
+   ENET_SOCKS5_STATE_CONNECTION_FAILED,
+   ENET_SOCKS5_STATE_CONNECTED
+} ENetSocks5State;
+
+typedef enum _ENetSocks5Version
+{
+   ENET_SOCKS5_VERSION_UNDEFINED = 0x00,
+   ENET_SOCKS5_VERSION_5         = 0x05
+} ENetSocks5Version;
+
+typedef enum _ENetSocks5AuthMethod
+{
+   ENET_SOCKS5_AUTH_NO_AUTH              = 0x00,
+   ENET_SOCKS5_AUTH_GSSAPI               = 0x01,
+   ENET_SOCKS5_AUTH_USERNAME_PASSWORD    = 0x02,
+   ENET_SOCKS5_AUTH_UNDEFINED            = 0xFE,
+   ENET_SOCKS5_AUTH_NO_ACCEPTABLE        = 0xFF
+} ENetSocks5AuthMethod;
+
+typedef enum _ENetSocks5Command
+{
+   ENET_SOCKS5_COMMAND_UNDEFINED      = 0x00,
+   ENET_SOCKS5_COMMAND_CONNECT        = 0x01,
+   ENET_SOCKS5_COMMAND_BIND           = 0x02,
+   ENET_SOCKS5_COMMAND_UDP_ASSOCIATE  = 0x03
+} ENetSocks5Command;
+
+typedef enum _ENetSocks5AddressType
+{
+   ENET_SOCKS5_ADDRESS_UNDEFINED   = 0x00,
+   ENET_SOCKS5_ADDRESS_IPV4        = 0x01,
+   ENET_SOCKS5_ADDRESS_DOMAIN_NAME = 0x03,
+   ENET_SOCKS5_ADDRESS_IPV6        = 0x04
+} ENetSocks5AddressType;
+
+typedef enum _ENetSocks5ReplyType
+{
+   ENET_SOCKS5_REPLY_SUCCEEDED               = 0x00,
+   ENET_SOCKS5_REPLY_GENERAL_FAILURE         = 0x01,
+   ENET_SOCKS5_REPLY_NOT_ALLOWED             = 0x02,
+   ENET_SOCKS5_REPLY_NETWORK_UNREACHABLE     = 0x03,
+   ENET_SOCKS5_REPLY_HOST_UNREACHABLE        = 0x04,
+   ENET_SOCKS5_REPLY_CONNECTION_REFUSED      = 0x05,
+   ENET_SOCKS5_REPLY_TTL_EXPIRED             = 0x06,
+   ENET_SOCKS5_REPLY_COMMAND_NOT_SUPPORTED   = 0x07,
+   ENET_SOCKS5_REPLY_ADDRESS_TYPE_UNSUPPORTED = 0x08
+} ENetSocks5ReplyType;
+
+typedef struct _ENetSocks5Authentication
+{
+   char* username;
+   char* password;
+} ENetSocks5Authentication;
+
+typedef struct _ENetSocks5Info
+{
+   char* ip;
+   enet_uint16 port;
+   ENetSocks5Authentication auth;
+} ENetSocks5Info;
+
 #ifdef _MSC_VER
 #pragma pack(push, 1)
 #define ENET_PACKED
@@ -61,6 +131,94 @@ typedef enum _ENetProtocolFlag
 #else
 #define ENET_PACKED
 #endif
+
+typedef struct _ENetSocks5Ipv4
+{
+   union {
+      enet_uint32 addr;
+      enet_uint8 parts[4];
+      struct {
+         enet_uint8 part4;
+         enet_uint8 part3;
+         enet_uint8 part2;
+         enet_uint8 part1;
+      };
+   };
+   enet_uint16 port;
+} ENET_PACKED ENetSocks5Ipv4;
+
+typedef struct _ENetSocks5Ipv6
+{
+   union {
+      enet_uint16 parts[8];
+      struct {
+         enet_uint16 part8;
+         enet_uint16 part7;
+         enet_uint16 part6;
+         enet_uint16 part5;
+         enet_uint16 part4;
+         enet_uint16 part3;
+         enet_uint16 part2;
+         enet_uint16 part1;
+      };
+   };
+   enet_uint16 port;
+} ENET_PACKED ENetSocks5Ipv6;
+
+typedef struct _ENetSocks5DomainName
+{
+   enet_uint8 length;
+   enet_uint8 name[255];
+   enet_uint16 port;
+} ENET_PACKED ENetSocks5DomainName;
+
+typedef struct _ENetSocks5AuthRequest
+{
+   enet_uint8 version;
+   enet_uint8 authMethodCount;
+   enet_uint8 authMethods[255];
+} ENET_PACKED ENetSocks5AuthRequest;
+
+typedef struct _ENetSocks5AuthRequestUsername
+{
+   enet_uint8 version;
+   enet_uint8 usernameLength;
+   enet_uint8 username[255];
+   enet_uint8 passwordLength;
+   enet_uint8 password[255];
+} ENET_PACKED ENetSocks5AuthRequestUsername;
+
+typedef struct _ENetSocks5AuthResponse
+{
+   enet_uint8 version;
+   enet_uint8 authMethod;
+} ENET_PACKED ENetSocks5AuthResponse;
+
+typedef struct _ENetSocks5Request
+{
+   enet_uint8 version;
+   enet_uint8 command;
+   enet_uint8 reserved;
+   enet_uint8 addressType;
+   ENetSocks5Ipv4 ipv4;
+} ENET_PACKED ENetSocks5Request;
+
+typedef struct _ENetSocks5Response
+{
+   enet_uint8 version;
+   enet_uint8 replyType;
+   enet_uint8 reserved;
+   enet_uint8 addressType;
+   ENetSocks5Ipv4 ipv4;
+} ENET_PACKED ENetSocks5Response;
+
+typedef struct _ENetSocks5Header
+{
+   enet_uint16 reserved;
+   enet_uint8 fragment;
+   enet_uint8 addressType;
+   ENetSocks5Ipv4 ipv4;
+} ENET_PACKED ENetSocks5Header;
 
 typedef struct _ENetProtocolHeader
 {

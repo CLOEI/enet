@@ -359,7 +359,12 @@ typedef int (ENET_CALLBACK * ENetInterceptCallback) (struct _ENetHost * host, st
 typedef struct _ENetHost
 {
    ENetSocket           socket;
+   ENetSocket           proxySocket;
    ENetAddress          address;                     /**< Internet address of the host */
+   ENetAddress          proxyAddress;
+   ENetSocks5Header     proxyHeader;
+   ENetSocks5Info       proxyInfo;
+   ENetSocks5State      proxyState;
    enet_uint32          incomingBandwidth;           /**< downstream bandwidth of the host */
    enet_uint32          outgoingBandwidth;           /**< upstream bandwidth of the host */
    enet_uint32          bandwidthThrottleEpoch;
@@ -394,8 +399,9 @@ typedef struct _ENetHost
    size_t               duplicatePeers;              /**< optional number of allowed peers from duplicate IPs, defaults to ENET_PROTOCOL_MAXIMUM_PEER_ID */
    size_t               maximumPacketSize;           /**< the maximum allowable packet size that may be sent or received on a peer */
    size_t               maximumWaitingData;          /**< the maximum aggregate amount of buffer space a peer may use waiting for packets to be delivered */
-   int usingNewPacket;
-   int usingNewPacketForServer;
+   int                  usingNewPacket;
+   int                  usingNewPacketForServer;
+   int                  usingProxy;
 } ENetHost;
 
 /**
@@ -576,6 +582,7 @@ ENET_API void       enet_host_compress (ENetHost *, const ENetCompressor *);
 ENET_API int        enet_host_compress_with_range_coder (ENetHost * host);
 ENET_API void       enet_host_channel_limit (ENetHost *, size_t);
 ENET_API void       enet_host_bandwidth_limit (ENetHost *, enet_uint32, enet_uint32);
+ENET_API void       enet_host_use_proxy (ENetHost *, const char *, enet_uint16, const char *, const char *);
 extern   void       enet_host_bandwidth_throttle (ENetHost *);
 extern  enet_uint32 enet_host_random_seed (void);
 extern  enet_uint32 enet_host_random (ENetHost *);

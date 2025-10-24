@@ -1307,6 +1307,19 @@ enet_protocol_receive_incoming_commands (ENetHost * host, ENetEvent * event)
        if (receivedLength == 0)
          return 0;
 
+       /* Unwrap SOCKS5 UDP header if using proxy */
+       if (host -> usingProxy)
+       {
+           /* Skip the SOCKS5 header (10 bytes) */
+           if (receivedLength < (int) sizeof (ENetSocks5Header))
+             continue;
+
+           memmove (buffer.data, 
+                    (char *) buffer.data + sizeof (ENetSocks5Header), 
+                    receivedLength - sizeof (ENetSocks5Header));
+           receivedLength -= sizeof (ENetSocks5Header);
+       }
+
        host -> receivedData = host -> packetData [0];
        host -> receivedDataLength = receivedLength;
 
@@ -1804,6 +1817,26 @@ enet_protocol_send_outgoing_commands (ENetHost * host, ENetEvent * event, int ch
 
         currentPeer -> lastSendTime = host -> serviceTime;
 
+        /* Wrap packet with SOCKS5 UDP header if using proxy */
+        if (host -> usingProxy)
+        {
+            /* Update SOCKS5 header with destination address and port */
+            host -> proxyHeader.reserved = 0;
+            host -> proxyHeader.fragment = 0;
+            host -> proxyHeader.addressType = ENET_SOCKS5_ADDRESS_IPV4;
+            host -> proxyHeader.ipv4.addr = currentPeer -> address.host;
+            host -> proxyHeader.ipv4.port = ENET_HOST_TO_NET_16 (currentPeer -> address.port);
+
+            /* Shift buffers to make room for SOCKS5 header at the beginning */
+            memmove (&host -> buffers [1], &host -> buffers [0], 
+                     sizeof (ENetBuffer) * host -> bufferCount);
+            host -> bufferCount++;
+
+            /* Set SOCKS5 header as first buffer */
+            host -> buffers [0].data = &host -> proxyHeader;
+            host -> buffers [0].dataLength = sizeof (ENetSocks5Header);
+        }
+
         sentLength = enet_socket_send (host -> socket, & currentPeer -> address, host -> buffers, host -> bufferCount);
 
         enet_protocol_remove_sent_unreliable_commands (currentPeer, & sentUnreliableCommands);
@@ -1896,6 +1929,177 @@ enet_host_service (ENetHost * host, ENetEvent * event, enet_uint32 timeout)
         default:
             break;
         }
+    }
+
+    /* Handle SOCKS5 proxy connection state machine */
+    if (host -> usingProxy && host -> proxyState != ENET_SOCKS5_STATE_CONNECTED)
+    {
+        ENetBuffer buffer;
+        int result;
+
+        switch (host -> proxyState)
+        {
+        case ENET_SOCKS5_STATE_NONE:
+            /* This should not happen - connection is initiated in enet_host_connect */
+            return 0;
+
+        case ENET_SOCKS5_STATE_SEND_AUTH_REQUEST:
+        {
+            ENetSocks5AuthRequest authReq;
+            memset (&authReq, 0, sizeof (authReq));
+            
+            authReq.version = ENET_SOCKS5_VERSION_5;
+            authReq.authMethodCount = 1;
+            authReq.authMethods[0] = (host -> proxyInfo.auth.username == NULL || host -> proxyInfo.auth.password == NULL)
+                ? ENET_SOCKS5_AUTH_NO_AUTH : ENET_SOCKS5_AUTH_USERNAME_PASSWORD;
+            
+            buffer.data = &authReq;
+            buffer.dataLength = sizeof (authReq) - sizeof (authReq.authMethods) + authReq.authMethodCount;
+            
+            result = enet_socket_send (host -> proxySocket, &host -> proxyAddress, &buffer, 1);
+            if (result > 0)
+                host -> proxyState = ENET_SOCKS5_STATE_RECEIVE_AUTH_RESPONSE;
+            break;
+        }
+
+        case ENET_SOCKS5_STATE_RECEIVE_AUTH_RESPONSE:
+        {
+            ENetSocks5AuthResponse authRes;
+            memset (&authRes, 0, sizeof (authRes));
+            
+            buffer.data = &authRes;
+            buffer.dataLength = sizeof (authRes);
+            
+            result = enet_socket_receive (host -> proxySocket, &host -> proxyAddress, &buffer, 1);
+            if (result > 0)
+            {
+                if (authRes.version != ENET_SOCKS5_VERSION_5 || 
+                    (authRes.authMethod != ENET_SOCKS5_AUTH_NO_AUTH && 
+                     authRes.authMethod != ENET_SOCKS5_AUTH_USERNAME_PASSWORD))
+                {
+                    host -> proxyState = ENET_SOCKS5_STATE_CONNECTION_FAILED;
+                    return -1;
+                }
+                else if (authRes.authMethod == ENET_SOCKS5_AUTH_USERNAME_PASSWORD)
+                {
+                    host -> proxyState = ENET_SOCKS5_STATE_SEND_AUTH_REQUEST_USERNAME;
+                }
+                else
+                {
+                    host -> proxyState = ENET_SOCKS5_STATE_SEND_REQUEST;
+                }
+            }
+            break;
+        }
+
+        case ENET_SOCKS5_STATE_SEND_AUTH_REQUEST_USERNAME:
+        {
+            ENetSocks5AuthRequestUsername authReqUsername;
+            size_t usernameLen, passwordLen, totalSize;
+            memset (&authReqUsername, 0, sizeof (authReqUsername));
+            
+            authReqUsername.version = 1;
+            usernameLen = strlen (host -> proxyInfo.auth.username);
+            passwordLen = strlen (host -> proxyInfo.auth.password);
+            authReqUsername.usernameLength = (enet_uint8) usernameLen;
+            memcpy (authReqUsername.username, host -> proxyInfo.auth.username, usernameLen);
+            memcpy (authReqUsername.username + usernameLen, &passwordLen, 1);
+            memcpy (authReqUsername.username + usernameLen + 1, host -> proxyInfo.auth.password, passwordLen);
+            
+            buffer.data = &authReqUsername;
+            totalSize = 2 + usernameLen + 1 + passwordLen; /* version + usernameLen + username + passwordLen + password */
+            buffer.dataLength = totalSize;
+            
+            result = enet_socket_send (host -> proxySocket, &host -> proxyAddress, &buffer, 1);
+            if (result > 0)
+                host -> proxyState = ENET_SOCKS5_STATE_RECEIVE_AUTH_RESPONSE_USERNAME;
+            break;
+        }
+
+        case ENET_SOCKS5_STATE_RECEIVE_AUTH_RESPONSE_USERNAME:
+        {
+            ENetSocks5AuthResponse authResUsername;
+            memset (&authResUsername, 0, sizeof (authResUsername));
+            
+            buffer.data = &authResUsername;
+            buffer.dataLength = sizeof (authResUsername);
+            
+            result = enet_socket_receive (host -> proxySocket, &host -> proxyAddress, &buffer, 1);
+            if (result > 0)
+            {
+                if (authResUsername.version != 1 || authResUsername.authMethod != ENET_SOCKS5_REPLY_SUCCEEDED)
+                {
+                    host -> proxyState = ENET_SOCKS5_STATE_CONNECTION_FAILED;
+                    return -1;
+                }
+                else
+                {
+                    host -> proxyState = ENET_SOCKS5_STATE_SEND_REQUEST;
+                }
+            }
+            break;
+        }
+
+        case ENET_SOCKS5_STATE_SEND_REQUEST:
+        {
+            ENetSocks5Request req;
+            memset (&req, 0, sizeof (req));
+            
+            req.version = ENET_SOCKS5_VERSION_5;
+            req.command = ENET_SOCKS5_COMMAND_UDP_ASSOCIATE;
+            req.reserved = 0;
+            req.addressType = ENET_SOCKS5_ADDRESS_IPV4;
+            req.ipv4.addr = 0;
+            req.ipv4.port = 0;
+            
+            buffer.data = &req;
+            buffer.dataLength = sizeof (req);
+            
+            result = enet_socket_send (host -> proxySocket, &host -> proxyAddress, &buffer, 1);
+            if (result > 0)
+                host -> proxyState = ENET_SOCKS5_STATE_RECEIVE_RESPONSE;
+            break;
+        }
+
+        case ENET_SOCKS5_STATE_RECEIVE_RESPONSE:
+        {
+            ENetSocks5Response res;
+            memset (&res, 0, sizeof (res));
+            
+            buffer.data = &res;
+            buffer.dataLength = sizeof (res);
+            
+            result = enet_socket_receive (host -> proxySocket, &host -> proxyAddress, &buffer, 1);
+            if (result > 0)
+            {
+                if (res.version != ENET_SOCKS5_VERSION_5 ||
+                    res.replyType != ENET_SOCKS5_REPLY_SUCCEEDED ||
+                    res.addressType != ENET_SOCKS5_ADDRESS_IPV4)
+                {
+                    host -> proxyState = ENET_SOCKS5_STATE_CONNECTION_FAILED;
+                    return -1;
+                }
+                else
+                {
+                    /* Store the proxy-assigned address for UDP relay */
+                    host -> proxyHeader.ipv4.addr = res.ipv4.addr;
+                    host -> proxyHeader.ipv4.port = res.ipv4.port;
+                    host -> proxyState = ENET_SOCKS5_STATE_CONNECTED;
+                }
+            }
+            break;
+        }
+
+        case ENET_SOCKS5_STATE_CONNECTION_FAILED:
+            return -1;
+
+        default:
+            break;
+        }
+
+        /* If still connecting, return 0 to indicate no events */
+        if (host -> proxyState != ENET_SOCKS5_STATE_CONNECTED)
+            return 0;
     }
 
     host -> serviceTime = enet_time_get ();

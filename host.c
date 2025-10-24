@@ -1,4 +1,4 @@
-/** 
+/**
  @file host.c
  @brief ENet host management functions
 */
@@ -10,7 +10,7 @@
     @{
 */
 
-/** Creates a host for communicating to peers.  
+/** Creates a host for communicating to peers.
 
     @param address   the address at which other peers may connect to this host.  If NULL, then no peers may connect to the host.
     @param peerCount the maximum number of peers that should be allocated for the host.
@@ -49,10 +49,14 @@ enet_host_create (const ENetAddress * address, size_t peerCount, size_t channelL
     memset (host -> peers, 0, peerCount * sizeof (ENetPeer));
 
     host -> socket = enet_socket_create (ENET_SOCKET_TYPE_DATAGRAM);
+    host -> proxySocket = enet_socket_create (ENET_SOCKET_TYPE_STREAM);
+
     if (host -> socket == ENET_SOCKET_NULL || (address != NULL && enet_socket_bind (host -> socket, address) < 0))
     {
        if (host -> socket != ENET_SOCKET_NULL)
          enet_socket_destroy (host -> socket);
+       if (host -> proxySocket != ENET_SOCKET_NULL)
+         enet_socket_destroy (host -> proxySocket);
 
        enet_free (host -> peers);
        enet_free (host);
@@ -65,8 +69,20 @@ enet_host_create (const ENetAddress * address, size_t peerCount, size_t channelL
     enet_socket_set_option (host -> socket, ENET_SOCKOPT_RCVBUF, ENET_HOST_RECEIVE_BUFFER_SIZE);
     enet_socket_set_option (host -> socket, ENET_SOCKOPT_SNDBUF, ENET_HOST_SEND_BUFFER_SIZE);
 
-    if (address != NULL && enet_socket_get_address (host -> socket, & host -> address) < 0)   
+    enet_socket_set_option (host -> proxySocket, ENET_SOCKOPT_NONBLOCK, 1);
+    enet_socket_set_option (host -> proxySocket, ENET_SOCKOPT_NODELAY, 0);
+
+    if (address != NULL && enet_socket_get_address (host -> socket, & host -> address) < 0)
       host -> address = * address;
+
+    /* Initialize SOCKS5 fields */
+    host -> proxyAddress.host = ENET_HOST_ANY;
+    host -> proxyAddress.port = 0;
+    memset(&host -> proxyHeader, 0, sizeof(ENetSocks5Header));
+    host -> proxyHeader.addressType = ENET_SOCKS5_ADDRESS_IPV4;
+    memset(&host -> proxyInfo, 0, sizeof(ENetSocks5Info));
+    host -> proxyState = ENET_SOCKS5_STATE_NONE;
+    host -> usingProxy = 0;
 
     if (! channelLimit || channelLimit > ENET_PROTOCOL_MAXIMUM_CHANNEL_COUNT)
       channelLimit = ENET_PROTOCOL_MAXIMUM_CHANNEL_COUNT;
@@ -91,7 +107,7 @@ enet_host_create (const ENetAddress * address, size_t peerCount, size_t channelL
     host -> receivedAddress.port = 0;
     host -> receivedData = NULL;
     host -> receivedDataLength = 0;
-     
+
     host -> totalSentData = 0;
     host -> totalSentPackets = 0;
     host -> totalReceivedData = 0;
@@ -146,6 +162,7 @@ enet_host_destroy (ENetHost * host)
       return;
 
     enet_socket_destroy (host -> socket);
+    enet_socket_destroy (host -> proxySocket);
 
     for (currentPeer = host -> peers;
          currentPeer < & host -> peers [host -> peerCount];
@@ -156,6 +173,14 @@ enet_host_destroy (ENetHost * host)
 
     if (host -> compressor.context != NULL && host -> compressor.destroy)
       (* host -> compressor.destroy) (host -> compressor.context);
+
+    /* Cleanup SOCKS5 allocated memory */
+    if (host -> proxyInfo.ip != NULL)
+      enet_free (host -> proxyInfo.ip);
+    if (host -> proxyInfo.auth.username != NULL)
+      enet_free (host -> proxyInfo.auth.username);
+    if (host -> proxyInfo.auth.password != NULL)
+      enet_free (host -> proxyInfo.auth.password);
 
     enet_free (host -> peers);
     enet_free (host);
@@ -175,7 +200,7 @@ enet_host_random (ENetHost * host)
     @param host host seeking the connection
     @param address destination for the connection
     @param channelCount number of channels to allocate
-    @param data user data supplied to the receiving host 
+    @param data user data supplied to the receiving host
     @returns a peer representing the foreign host on success, NULL on failure
     @remarks The peer returned will have not completed the connection until enet_host_service()
     notifies of an ENET_EVENT_TYPE_CONNECT event for the peer.
@@ -213,11 +238,24 @@ enet_host_connect (ENetHost * host, const ENetAddress * address, size_t channelC
     currentPeer -> connectID = enet_host_random (host);
     currentPeer -> mtu = host -> mtu;
 
+    /* Initiate SOCKS5 proxy connection if configured */
+    if (host -> usingProxy && host -> proxyState == ENET_SOCKS5_STATE_NONE)
+    {
+        if (enet_address_set_host (&host -> proxyAddress, host -> proxyInfo.ip) < 0)
+          return NULL;
+        host -> proxyAddress.port = host -> proxyInfo.port;
+
+        if (enet_socket_connect (host -> proxySocket, &host -> proxyAddress) < 0)
+          return NULL;
+
+        host -> proxyState = ENET_SOCKS5_STATE_SEND_AUTH_REQUEST;
+    }
+
     if (host -> outgoingBandwidth == 0)
       currentPeer -> windowSize = ENET_PROTOCOL_MAXIMUM_WINDOW_SIZE;
     else
       currentPeer -> windowSize = (host -> outgoingBandwidth /
-                                    ENET_PEER_WINDOW_SIZE_SCALE) * 
+                                    ENET_PEER_WINDOW_SIZE_SCALE) *
                                       ENET_PROTOCOL_MINIMUM_WINDOW_SIZE;
 
     if (currentPeer -> windowSize < ENET_PROTOCOL_MINIMUM_WINDOW_SIZE)
@@ -225,7 +263,7 @@ enet_host_connect (ENetHost * host, const ENetAddress * address, size_t channelC
     else
     if (currentPeer -> windowSize > ENET_PROTOCOL_MAXIMUM_WINDOW_SIZE)
       currentPeer -> windowSize = ENET_PROTOCOL_MAXIMUM_WINDOW_SIZE;
-         
+
     for (channel = currentPeer -> channels;
          channel < & currentPeer -> channels [channelCount];
          ++ channel)
@@ -241,7 +279,7 @@ enet_host_connect (ENetHost * host, const ENetAddress * address, size_t channelC
         channel -> usedReliableWindows = 0;
         memset (channel -> reliableWindows, 0, sizeof (channel -> reliableWindows));
     }
-        
+
     command.header.command = ENET_PROTOCOL_COMMAND_CONNECT | ENET_PROTOCOL_COMMAND_FLAG_ACKNOWLEDGE;
     command.header.channelID = 0xFF;
     command.connect.outgoingPeerID = ENET_HOST_TO_NET_16 (currentPeer -> incomingPeerID);
@@ -257,7 +295,7 @@ enet_host_connect (ENetHost * host, const ENetAddress * address, size_t channelC
     command.connect.packetThrottleDeceleration = ENET_HOST_TO_NET_32 (currentPeer -> packetThrottleDeceleration);
     command.connect.connectID = currentPeer -> connectID;
     command.connect.data = ENET_HOST_TO_NET_32 (data);
- 
+
     enet_peer_queue_outgoing_command (currentPeer, & command, NULL, 0, 0);
 
     return currentPeer;
@@ -376,7 +414,7 @@ enet_host_bandwidth_throttle (ENetHost * host)
     while (peersRemaining > 0 && needsAdjustment != 0)
     {
         needsAdjustment = 0;
-        
+
         if (dataTotal <= bandwidth)
           throttle = ENET_PEER_PACKET_THROTTLE_SCALE;
         else
@@ -387,7 +425,7 @@ enet_host_bandwidth_throttle (ENetHost * host)
              ++ peer)
         {
             enet_uint32 peerBandwidth;
-            
+
             if ((peer -> state != ENET_PEER_STATE_CONNECTED && peer -> state != ENET_PEER_STATE_DISCONNECT_LATER) ||
                 peer -> incomingBandwidth == 0 ||
                 peer -> outgoingBandwidthThrottleEpoch == timeCurrent)
@@ -397,12 +435,12 @@ enet_host_bandwidth_throttle (ENetHost * host)
             if ((throttle * peer -> outgoingDataTotal) / ENET_PEER_PACKET_THROTTLE_SCALE <= peerBandwidth)
               continue;
 
-            peer -> packetThrottleLimit = (peerBandwidth * 
+            peer -> packetThrottleLimit = (peerBandwidth *
                                             ENET_PEER_PACKET_THROTTLE_SCALE) / peer -> outgoingDataTotal;
-            
+
             if (peer -> packetThrottleLimit == 0)
               peer -> packetThrottleLimit = 1;
-            
+
             if (peer -> packetThrottle > peer -> packetThrottleLimit)
               peer -> packetThrottle = peer -> packetThrottleLimit;
 
@@ -472,7 +510,7 @@ enet_host_bandwidth_throttle (ENetHost * host)
                  continue;
 
                peer -> incomingBandwidthThrottleEpoch = timeCurrent;
- 
+
                needsAdjustment = 1;
                -- peersRemaining;
                bandwidth -= peer -> outgoingBandwidth;
@@ -496,8 +534,48 @@ enet_host_bandwidth_throttle (ENetHost * host)
              command.bandwidthLimit.incomingBandwidth = ENET_HOST_TO_NET_32 (bandwidthLimit);
 
            enet_peer_queue_outgoing_command (peer, & command, NULL, 0, 0);
-       } 
+       }
     }
 }
-    
+
+/** Configures the host to use a SOCKS5 proxy for connections.
+    @param host host to configure
+    @param ip IP address of the SOCKS5 proxy server
+    @param port port of the SOCKS5 proxy server
+    @param username username for authentication (can be NULL for no auth)
+    @param password password for authentication (can be NULL for no auth)
+*/
+void
+enet_host_use_proxy (ENetHost * host, const char * ip, enet_uint16 port, const char * username, const char * password)
+{
+    if (host == NULL || ip == NULL)
+      return;
+
+    host -> usingProxy = 1;
+
+    host -> proxyInfo.ip = (char *) enet_malloc (strlen (ip) + 1);
+    if (host -> proxyInfo.ip != NULL)
+      strcpy (host -> proxyInfo.ip, ip);
+
+    host -> proxyInfo.port = port;
+
+    if (username != NULL)
+    {
+        host -> proxyInfo.auth.username = (char *) enet_malloc (strlen (username) + 1);
+        if (host -> proxyInfo.auth.username != NULL)
+          strcpy (host -> proxyInfo.auth.username, username);
+    }
+    else
+      host -> proxyInfo.auth.username = NULL;
+
+    if (password != NULL)
+    {
+        host -> proxyInfo.auth.password = (char *) enet_malloc (strlen (password) + 1);
+        if (host -> proxyInfo.auth.password != NULL)
+          strcpy (host -> proxyInfo.auth.password, password);
+    }
+    else
+      host -> proxyInfo.auth.password = NULL;
+}
+
 /** @} */
